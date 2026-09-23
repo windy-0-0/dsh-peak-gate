@@ -1,0 +1,38 @@
+{
+  "name": "dsh-peak-gate",
+  "version": "0.4.0",
+  "description": "DSH 请求闸门：① 高峰时段自动挂起模型请求、低谷放行省钱；② 断网/连接失败不中断会话，挂起等待并自动重试；③ 徽章列出每条挂起请求属于哪个对话，可单独放行或「忽略本次」（该对话限时免拦）。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "peak",
+    "off-peak",
+    "scheduler",
+    "gate",
+    "network",
+    "retry",
+    "resilience"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/windy-0-0/dsh-peak-gate.git"
+  },
+  "bugs": {
+    "url": "https://github.com/windy-0-0/dsh-peak-gate/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
