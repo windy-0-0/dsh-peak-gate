@@ -260,7 +260,7 @@ await t('只关网络挂起 → 高峰避让不受影响', async () => {
   assert.equal(s.enabled, true)
   // 时段取决于跑测试时的真实钟点（本用例不必断言 phase），只验证高峰避让的配置仍在
   assert.deepEqual(s.windows, [[9, 12], [14, 18]], '高峰窗口配置应保持')
-  assert.equal(s.match.providers.includes('deepseek'), true, '高峰匹配规则应保持')
+  assert.equal(s.match.providers.includes('deepseek-official'), true, '高峰匹配规则应保持（v0.4.2 默认已收窄为精确键）')
 })
 
 await t('重新打开网络挂起 → 立刻恢复接管', async () => {

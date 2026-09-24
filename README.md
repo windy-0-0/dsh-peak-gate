@@ -120,7 +120,7 @@ curl -X POST http://127.0.0.1:3080/dsh-peak-gate/release \
 ```json
 {
   "enabled": true,
-  "match": { "providers": ["deepseek"], "models": [] },
+  "match": { "providers": ["deepseek-official"], "models": [] },
   "windows": [[9, 12], [14, 18]],
   "weekendsValley": true,
   "ui": { "position": "bottom-left" },
@@ -139,8 +139,8 @@ curl -X POST http://127.0.0.1:3080/dsh-peak-gate/release \
 | 字段 | 含义 |
 | --- | --- |
 | `enabled` | 总开关（false = 高峰避让与网络挂起都停用） |
-| `match.providers` | 高峰要拦截的 provider 路由键（子串、小写匹配）；空数组 = 全部 |
-| `match.models` | 高峰要拦截的模型名（子串匹配）；空数组 = 全部 |
+| `match.providers` | 高峰要拦截的 provider 路由键（**默认精确相等**；空数组 = 全部） |
+| `match.models` | 高峰要拦截的模型名（**默认精确相等**；空数组 = 全部） |
 | `windows` | 高峰窗口（北京时间，`[start, end)`），可自定义 |
 | `weekendsValley` | 周末全天按谷价 → 不拦截（官方 2026-08-23 起政策） |
 | `ui.position` | 徽章位置：`bottom-left` / `bottom-right` / `top-left` / `top-right` |

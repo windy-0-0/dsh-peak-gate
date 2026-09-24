@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { __internal } from '../lib/index.js'
 
 const {
-  isPeakAt, nextReleaseAt, hhmm, matchesGate, sanitizeConfig, sanitizeNetPark, mergeConfig,
+  isPeakAt, nextReleaseAt, hhmm, matchesGate, compileMatcher, sanitizeConfig, sanitizeNetPark, mergeConfig,
   shouldParkFailure, computeNetDelay, DEFAULT_CONFIG,
 } = __internal
 const cfg = DEFAULT_CONFIG
@@ -71,17 +71,45 @@ t('放行时刻本身不是高峰', () => {
   assert.equal(isPeakAt(r, cfg), false)
 })
 
-console.log('matchesGate —— 匹配规则')
+console.log('matchesGate —— 匹配规则（v0.4.2 起默认精确，模糊必须显式通配）')
 const m = (provider, model) => matchesGate({ provider, model }, cfg)
-t('provider=deepseek, model=deepseek-v4-flash → 命中', () => assert.equal(m('deepseek', 'deepseek-v4-flash'), true))
-t('provider=DeepSeek（大小写不敏感）→ 命中', () => assert.equal(m('DeepSeek', 'deepseek-chat'), true))
+t('出厂默认：provider=deepseek-official → 命中', () => assert.equal(m('deepseek-official', 'deepseek-v4-flash'), true))
+t('出厂默认：provider=DeepSeek-Official（大小写不敏感）→ 命中', () => assert.equal(m('DeepSeek-Official', 'deepseek-chat'), true))
+t('⚠️ 回归（L-2026-09-24-02）：出厂默认不得命中 deepseek-web', () => assert.equal(m('deepseek-web', 'deepseek-reasoner'), false))
+t('⚠️ 回归：出厂默认不得命中裸 deepseek', () => assert.equal(m('deepseek', 'deepseek-chat'), false))
 t('provider=anthropic → 不命中', () => assert.equal(m('anthropic', 'claude-sonnet'), false))
-t('provider=deepseek, models=[] 全模型命中', () => assert.equal(m('deepseek', 'anything-model'), true))
+t('出厂默认：models=[] 时全模型命中', () => assert.equal(m('deepseek-official', 'anything-model'), true))
+
+console.log('compileMatcher —— 模式语义')
+const cm = (pattern, value) => compileMatcher(pattern)(value)
+t('无通配符 = 精确相等', () => {
+  assert.equal(cm('deepseek', 'deepseek'), true)
+  assert.equal(cm('deepseek', 'deepseek-web'), false)
+})
+t('`*` 通配：前缀', () => {
+  assert.equal(cm('deepseek-*', 'deepseek-web'), true)
+  assert.equal(cm('deepseek-*', 'deepseek-official'), true)
+  assert.equal(cm('deepseek-*', 'deepseek'), false)
+})
+t('`*` 通配：子串', () => assert.equal(cm('*flash*', 'deepseek-v4-flash'), true))
+t('`*` 通配：全覆盖', () => assert.equal(cm('*', 'anything'), true))
+t('`re:` 正则', () => {
+  assert.equal(cm('re:^deepseek-(web|official)$', 'deepseek-web'), true)
+  assert.equal(cm('re:^deepseek-(web|official)$', 'deepseek'), false)
+})
+t('非法正则 → 永不匹配（不抛异常、不静默放大）', () => assert.equal(cm('re:[', 'anything'), false))
+t('空模式 → 永不匹配', () => assert.equal(cm('', 'anything'), false))
+
 const cfgM = sanitizeConfig({ match: { providers: [], models: ['chat'] } })
-t('providers=[] 匹配全部 provider', () => assert.equal(matchesGate({ provider: 'openai', model: 'deepseek-chat' }, cfgM), true))
-t('models=["chat"] 只命中含 chat 的模型', () => {
-  assert.equal(matchesGate({ provider: 'openai', model: 'deepseek-chat' }, cfgM), true)
-  assert.equal(matchesGate({ provider: 'openai', model: 'deepseek-reasoner' }, cfgM), false)
+t('providers=[] 匹配全部 provider', () => assert.equal(matchesGate({ provider: 'openai', model: 'chat' }, cfgM), true))
+t('models=["chat"] 只命中精确等于 chat 的模型', () => {
+  assert.equal(matchesGate({ provider: 'openai', model: 'chat' }, cfgM), true)
+  assert.equal(matchesGate({ provider: 'openai', model: 'deepseek-chat' }, cfgM), false)
+})
+t('models=["*chat*"] 才命中含 chat 的模型', () => {
+  const c = sanitizeConfig({ match: { providers: [], models: ['*chat*'] } })
+  assert.equal(matchesGate({ provider: 'openai', model: 'deepseek-chat' }, c), true)
+  assert.equal(matchesGate({ provider: 'openai', model: 'deepseek-reasoner' }, c), false)
 })
 
 console.log('sanitizeConfig —— 清洗与默认')
