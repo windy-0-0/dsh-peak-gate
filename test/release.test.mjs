@@ -97,9 +97,17 @@ const release = (body) => callRoute(routes, '/dsh-peak-gate/release', 'POST', bo
 const putConfig = (patch) => callRoute(routes, '/dsh-peak-gate/config.json', 'PUT', patch).json
 const wake = () => callRoute(routes, '/dsh-peak-gate/wake', 'POST').json
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+/** 清空所有免拦：放行/忽略都会给会话加免拦，用例之间必须互不影响。 */
+const resetBypass = () => release({ undo: 'bypass' })
+/** 模拟"回合结束"（DSH 会发 agent/turn-stopping）。 */
+const turnStopping = (sessionKey) => {
+  const handler = listeners.get('agent/turn-stopping')
+  assert.ok(handler, 'agent/turn-stopping 监听器未注册')
+  handler({ agent: { options: { model: 'deepseek-v4-flash' }, session: { id: sessionKey } } })
+}
 
-/** 发起一次"模型调用"：返回 { started, done }，done 解析为下游产出的 chunk 列表。 */
-function startCall({ sessionId, text, purpose }) {
+/** 发起一次"模型调用"：返回 { done }，done 解析为下游产出的 chunk 列表。 */
+function startCall({ sessionId, text, purpose, messages }) {
   const chunks = []
   const next = () => (async function* () {
     yield { type: 'text', text: `来自 ${sessionId || '无会话'}` }
@@ -110,9 +118,9 @@ function startCall({ sessionId, text, purpose }) {
       model: 'deepseek-v4-flash',
       sessionId,
       purpose,
-      messages: text
-        ? [{ id: 'm1', role: 'user', content: [{ type: 'text', text }] }]
-        : [],
+      messages: messages || (text
+        ? [{ id: 'm1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] }]
+        : []),
     },
     next,
   )
@@ -154,6 +162,7 @@ await t('高峰挂起会登记身份：哪个对话、哪个模型、几点自�
 })
 
 await t('两个对话各自挂起，标签可区分', async () => {
+  resetBypass() // 上一个用例的"放行"会给会话加本轮免拦，先清干净
   const a = startCall({ sessionId: 'session:aaa111', text: 'A 对话：帮我写周报' })
   const b = startCall({ sessionId: 'session:bbb222', text: 'B 对话：查一下磁盘占用' })
   await sleep(120)
@@ -198,6 +207,7 @@ await t('内部调用（生成会话标题）标注得出来，不与用户对�
 console.log('按请求放行 —— 与网络挂起共用同一份清单')
 
 await t('高峰挂起与网络挂起同时存在时，统一清单区分 kind', async () => {
+  resetBypass() // 该会话前面被"放行"过，先清掉本轮免拦
   const peakCall = startCall({ sessionId: 'session:aaa111', text: '高峰里挂着的对话' })
   await sleep(100)
   const onRequestError = listeners.get('agent/request-error')
@@ -282,6 +292,7 @@ await t('累计计数保留：放行不清空统计', () => {
 console.log('「忽略本次」—— 该对话在有效期内免拦')
 
 await t('忽略本次：放行这一个，并让该对话进入免拦名单', async () => {
+  resetBypass()
   const call = startCall({ sessionId: 'session:ddd444', text: '这个对话我在干活，别拦' })
   await sleep(120)
   const p = state().parks[0]
@@ -295,17 +306,21 @@ await t('忽略本次：放行这一个，并让该对话进入免拦名单', as
   assert.equal(s.parks.length, 0)
   assert.equal(s.bypass.length, 1)
   assert.equal(s.bypass[0].sessionId, 'ddd444')
+  assert.equal(s.bypass[0].mode, 'ignore', '应标记为「忽略本次」类免拦')
   assert.equal(s.bypass[0].label, '这个对话我在干活，别拦')
   assert.ok(s.bypass[0].remainMs > 0, '应带免拦剩余时间')
   assert.equal(s.bypassMs, 600000, '默认有效期 10 分钟')
 })
 
-await t('免拦生效：该对话的高峰挂起直接放行（不再等待）', async () => {
+await t('免拦是滑动窗口：继续用这个对话就一直免拦，且剩余时间被续期', async () => {
+  const before = state().bypass[0].remainMs
   const call = startCall({ sessionId: 'session:ddd444', text: '免拦后的第二次请求' })
   await sleep(150)
   assert.equal(state().parks.length, 0, '不应该再被挂起')
   const chunks = await call.done // 直接走到下游
   assert.equal(chunks.length, 1, '请求没有等待，直接发出')
+  const after = state().bypass[0].remainMs
+  assert.ok(after >= before - 200, `活跃请求应把免拦续期（before=${before} after=${after}）`)
 })
 
 await t('免拦只针对那个对话：别的对话照旧被挂起', async () => {
@@ -343,7 +358,7 @@ await t('撤销免拦后，该对话重新被闸门管住', async () => {
   const r = release({ undo: 'bypass', sessionId: 'ddd444' })
   assert.equal(r.ok, true)
   assert.equal(r.cleared, 1)
-  assert.equal(state().bypass.length, 0)
+  assert.equal(state().bypass.filter((b) => b.sessionId === 'ddd444').length, 0, 'ddd444 的免拦应被撤销')
 
   const call = startCall({ sessionId: 'session:ddd444', text: '恢复后应该又被挂起' })
   await sleep(150)
@@ -354,6 +369,7 @@ await t('撤销免拦后，该对话重新被闸门管住', async () => {
 })
 
 await t('免拦有效期到点自动失效（bypassMs 可配）', async () => {
+  resetBypass()
   assert.equal(putConfig({ bypassMs: 1000 }).state.bypassMs, 1000)
 
   const call = startCall({ sessionId: 'session:fff666', text: '短效免拦' })
@@ -373,6 +389,126 @@ await t('免拦有效期到点自动失效（bypassMs 可配）', async () => {
   await again.done
 
   assert.equal(putConfig({ bypassMs: 600000 }).state.bypassMs, 600000)
+})
+
+console.log('「放行」—— 本轮不再拦（治"点一次只前进一步"）')
+
+await t('放行一次：该对话在本轮内不再被挂起（不用反复点）', async () => {
+  resetBypass()
+  const first = startCall({ sessionId: 'session:ggg777', text: '我在干活的长对话' })
+  await sleep(120)
+  const p = state().parks[0]
+  const r = release({ id: p.id }) // 就是徽章上的「放行」
+  assert.equal(r.released, 1)
+  assert.equal(r.bypassed, 1, '放行也会给该对话加"本轮免拦"')
+  await first.done
+
+  const s = state()
+  assert.equal(s.parks.length, 0)
+  assert.equal(s.bypass.length, 1)
+  assert.equal(s.bypass[0].mode, 'turn', '应标记为「放行本轮」类免拦')
+  assert.equal(s.bypass[0].sessionId, 'ggg777')
+
+  // 同一轮里的后续步骤（可能有很多步）都不应再被挂起
+  for (let i = 0; i < 3; i++) {
+    const next = startCall({ sessionId: 'session:ggg777', text: `本轮第 ${i + 2} 步` })
+    await sleep(120)
+    assert.equal(state().parks.length, 0, `第 ${i + 2} 步不该再挂起`)
+    await next.done
+  }
+})
+
+await t('放行只影响那个对话：别的对话照旧被挂起', async () => {
+  const other = startCall({ sessionId: 'session:hhh888', text: '另一个对话照旧省钱' })
+  await sleep(150)
+  const s = state()
+  assert.equal(s.parks.length, 1, '别的对话仍被挂起')
+  assert.equal(s.parks[0].sessionId, 'hhh888')
+  assert.equal(release({ id: s.parks[0].id }).released, 1)
+  await other.done
+})
+
+await t('回合结束（agent/turn-stopping）→ 立刻恢复拦截，回到省钱', async () => {
+  turnStopping('session:ggg777')
+  const s = state()
+  assert.equal(s.bypass.filter((b) => b.sessionId === 'ggg777').length, 0, '本轮免拦应被清除')
+
+  const call = startCall({ sessionId: 'session:ggg777', text: '新的一轮，应该重新被挂起' })
+  await sleep(150)
+  const after = state()
+  assert.equal(after.parks.length, 1, '回合结束后应重新挂起')
+  assert.equal(after.parks[0].sessionId, 'ggg777')
+  assert.equal(release({ id: after.parks[0].id }).released, 1)
+  await call.done
+})
+
+await t('免拦可手动撤销（undo=bypass 同时清掉本轮与忽略两类）', async () => {
+  resetBypass()
+  const a = startCall({ sessionId: 'session:iii999', text: 'A' })
+  await sleep(120)
+  assert.equal(release({ id: state().parks[0].id }).bypassed, 1, '放行 → 本轮免拦')
+  await a.done
+
+  const b = startCall({ sessionId: 'session:jjj000', text: 'B' })
+  await sleep(120)
+  assert.equal(release({ id: state().parks[0].id, action: 'bypass' }).bypassed, 1, '忽略 → 限时免拦')
+  await b.done
+
+  assert.equal(state().bypass.length, 2)
+  const cleared = resetBypass()
+  assert.equal(cleared.cleared, 2, '两类免拦都应被撤销')
+  assert.equal(state().bypass.length, 0)
+})
+
+console.log('身份标签只认真人消息（后台通知/系统提醒不算）')
+
+await t('后台任务完成通知是 user 角色，但标签必须显示真人那句', async () => {
+  resetBypass()
+  const call = startCall({
+    sessionId: 'session:kkk111',
+    messages: [
+      { id: 'm1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '这是我的真实发言' }] },
+      { id: 'm2', role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text: '好的' }] },
+      // 后台任务完成通知：role=user 但由插件注入
+      { id: 'm3', role: 'user', source: { kind: 'plugin', plugin: 'jobs' }, content: [{ type: 'text', text: 'background job bash-2 finished' }] },
+    ],
+  })
+  await sleep(120)
+  const p = state().parks[0]
+  assert.equal(p.label, '这是我的真实发言', '应取真人消息，而不是插件注入的后台通知')
+  release({ id: p.id })
+  await call.done
+})
+
+await t('system-reminder 之类的注入消息同样不算', async () => {
+  resetBypass()
+  const call = startCall({
+    sessionId: 'session:lll222',
+    messages: [
+      { id: 'm1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '帮我改一下插件' }] },
+      { id: 'm2', role: 'user', source: { kind: 'plugin', plugin: 'memgas' }, content: [{ type: 'text', text: '<system-reminder> Update: 长期记忆…' }] },
+    ],
+  })
+  await sleep(120)
+  const p = state().parks[0]
+  assert.equal(p.label, '帮我改一下插件')
+  release({ id: p.id })
+  await call.done
+})
+
+await t('整段没有真人消息（纯后台唤醒）→ 如实标注为「后台通知」', async () => {
+  resetBypass()
+  const call = startCall({
+    sessionId: 'session:mmm333',
+    messages: [
+      { id: 'm1', role: 'user', source: { kind: 'plugin', plugin: 'jobs' }, content: [{ type: 'text', text: 'background job bash-9 finished: ok' }] },
+    ],
+  })
+  await sleep(120)
+  const p = state().parks[0]
+  assert.match(p.label, /^后台通知 · /, `应标注为后台通知，实际=${p.label}`)
+  release({ id: p.id })
+  await call.done
 })
 
 console.log(`\n全部通过：${passed} 项`)
