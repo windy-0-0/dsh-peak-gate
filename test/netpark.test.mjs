@@ -262,16 +262,15 @@ await t('用户中止回合（signal aborted）→ 挂起中立即退出，不�
   assert.equal(state().network.parkedNow, 0, '挂起应立即清空')
 })
 
-await t('总开关关闭 → 完全不接管（且网络挂起随之失效）', async () => {
+await t('总开关只关高峰避让，不牵连网络挂起（用户点「停用」不该失去合盖保护）', async () => {
   const body = putConfig({ enabled: false })
   assert.equal(body.ok, true)
-  assert.equal(body.state.enabled, false)
-  assert.equal(body.state.network.enabled, false)
+  assert.equal(body.state.enabled, false, '高峰避让总开关已关')
+  assert.equal(body.state.network.enabled, true, '网络挂起有独立开关，不受总开关影响')
 
-  const { next, wasCalled } = passthroughNext()
+  const { next } = passthroughNext()
   const decision = await onRequestError(transportPayload(8), next)
-  assert.equal(decision, undefined)
-  assert.equal(wasCalled(), true)
+  assert.deepEqual(decision, { kind: 'retry' }, '总开关关闭时，网络失败仍应被挂起（否则合盖又会断）')
 })
 
 await t('局部热更新 netPark 不丢失其它字段（autoRetryMs 保留）', async () => {

@@ -127,7 +127,7 @@ curl -X POST http://127.0.0.1:3080/dsh-peak-gate/release \
   "bypassMs": 600000,
   "netPark": {
     "enabled": true,
-    "codes": ["TRANSPORT", "TIMEOUT", "SERVER", "RATE_LIMIT", "EMPTY_RESPONSE"],
+    "codes": ["TRANSPORT", "TIMEOUT", "SERVER"],
     "transportDead": {
       "enabled": true,
       "patterns": [
@@ -151,7 +151,7 @@ curl -X POST http://127.0.0.1:3080/dsh-peak-gate/release \
 
 | 字段 | 含义 |
 | --- | --- |
-| `enabled` | 总开关（false = 高峰避让与网络挂起都停用） |
+| `enabled` | **高峰避让**总开关（false = 不做高峰避让）。**不影响网络挂起**：徽章上点「停用」只停避让，断网/合盖的保护仍在（2026-09-27 起） |
 | `match.providers` | 高峰要拦截的 provider 路由键（**默认精确相等**；空数组 = 全部） |
 | `match.models` | 高峰要拦截的模型名（**默认精确相等**；空数组 = 全部） |
 | `windows` | 高峰窗口（北京时间，`[start, end)`），可自定义 |
@@ -159,8 +159,8 @@ curl -X POST http://127.0.0.1:3080/dsh-peak-gate/release \
 | `ui.position` | 徽章位置：`bottom-left` / `bottom-right` / `top-left` / `top-right` |
 | `bypassMs` | 「忽略 N 分钟」的免拦时长（毫秒，默认 600000 = 10 分钟；范围 1s–24h；**滑动续期**） |
 | `turnBypassMs` | 「放行本轮」的兜底时长（毫秒，默认 300000 = 5 分钟；回合正常结束时立即清除） |
-| `netPark.enabled` | 网络故障挂起开关（只关它，高峰避让照旧） |
-| `netPark.codes` | 要接管的失败码白名单（见上表；不在白名单的已知码一律不接管） |
+| `netPark.enabled` | 网络故障挂起开关（**独立**于上面的总开关；只关它，高峰避让照旧） |
+| `netPark.codes` | 要接管的失败码白名单。**默认只含 `TRANSPORT` / `TIMEOUT` / `SERVER`**（传输层真断了）；不含 `RATE_LIMIT` / `EMPTY_RESPONSE`——那两类内置 `llm-retry` 已在退避重试，再挂起会把会话冻住、明显打扰用户 |
 | `netPark.match` | 网络挂起作用范围；**空数组 = 所有 provider**（断网不分 provider） |
 | `netPark.autoRetryMs` | 首次自动重试间隔（默认 15s，下限 1s） |
 | `netPark.maxAutoRetryMs` | 退避上限（默认 60s，上限 1h） |

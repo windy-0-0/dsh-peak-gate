@@ -130,10 +130,16 @@ console.log('shouldParkFailure —— 网络故障挂起判定（2026-09-23 新�
 t('TRANSPORT（断网/连接失败）→ 接管', () => {
   assert.equal(shouldParkFailure({ code: 'TRANSPORT', message: 'DeepSeek API request to https://api.deepseek.com failed' }, cfg), true)
 })
-t('TIMEOUT / SERVER / RATE_LIMIT → 接管', () => {
+t('TIMEOUT / SERVER → 接管', () => {
   assert.equal(shouldParkFailure({ code: 'TIMEOUT' }, cfg), true)
   assert.equal(shouldParkFailure({ code: 'SERVER' }, cfg), true)
-  assert.equal(shouldParkFailure({ code: 'RATE_LIMIT' }, cfg), true)
+})
+t('RATE_LIMIT / EMPTY_RESPONSE → 默认不接管（内置 llm-retry 已在退避重试，挂起会冻住会话）', () => {
+  assert.equal(shouldParkFailure({ code: 'RATE_LIMIT' }, cfg), false)
+  assert.equal(shouldParkFailure({ code: 'EMPTY_RESPONSE' }, cfg), false)
+  // 想接管就自己加回 codes
+  const withRate = sanitizeConfig({ netPark: { codes: ['TRANSPORT', 'RATE_LIMIT'] } })
+  assert.equal(shouldParkFailure({ code: 'RATE_LIMIT' }, withRate), true)
 })
 t('QUOTA（额度不足）→ 不接管，照常失败', () => {
   assert.equal(shouldParkFailure({ code: 'QUOTA', message: 'DeepSeek API error (HTTP 402)' }, cfg), false)
