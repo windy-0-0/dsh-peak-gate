@@ -128,6 +128,19 @@ curl -X POST http://127.0.0.1:3080/dsh-peak-gate/release \
   "netPark": {
     "enabled": true,
     "codes": ["TRANSPORT", "TIMEOUT", "SERVER", "RATE_LIMIT", "EMPTY_RESPONSE"],
+    "transportDead": {
+      "enabled": true,
+      "patterns": [
+        "CDP 已关闭",
+        "CDP 未连接",
+        "CDP 连接超时",
+        "没有 chat.deepseek.com 页面目标",
+        "浏览器没有在期限内打开调试端口",
+        "浏览器代发传输层已释放"
+      ],
+      "retryLimit": 0,
+      "recoverUrl": "http://127.0.0.1:3080/plugins/web-transport-watchdog/recover?reason=peak-gate"
+    },
     "match": { "providers": [], "models": [] },
     "autoRetryMs": 15000,
     "maxAutoRetryMs": 60000,
@@ -152,6 +165,22 @@ curl -X POST http://127.0.0.1:3080/dsh-peak-gate/release \
 | `netPark.autoRetryMs` | 首次自动重试间隔（默认 15s，下限 1s） |
 | `netPark.maxAutoRetryMs` | 退避上限（默认 60s，上限 1h） |
 | `netPark.maxAttempts` | 同一 turn+step 最多挂起几次；`0` = 不限（默认） |
+| `netPark.transportDead.patterns` | **传输层已死**的判据（报文包含即命中）。与"网络抖动"分开：抖动重试能救，通道死了重试是空转——该修通道 |
+| `netPark.transportDead.retryLimit` | `0`（默认）=**不放弃挂起**，宁可等通道修好也不打断对话；`>0` = 连续失败到该次数就停止挂起、交回原生失败 |
+| `netPark.transportDead.recoverUrl` | 命中判据时主动调用的"修通道"接口（默认调 `dsh-web-transport-watchdog` 的 `/recover`；没装则静默跳过） |
+
+### 合盖/睡眠唤醒后为什么不再断（v0.4.2）
+
+Mac 合盖后浏览器传输层（免费通道 `deepseek-web` 用的 CDP 会话）会随之死亡，唤醒后第一个请求必然报
+`DeepSeek session create failed: CDP 已关闭`。这条失败**不需要你去点**就会被处理成两步：
+
+1. 闸门先**把失败通知给下游**（`agent/request-error` 是瀑布）——`dsh-web-transport-watchdog`
+   正是靠这条信号去「清陈旧端口文件 → 重绑 browser → 杀卡死进程 → 降级 node 保任务」；
+2. 闸门自己**挂起这一轮**（默认不放弃）并退避重试；通道修好后重试即成功，**对话不中断**。
+
+> 反例（v0.4.1 及更早的坑）：闸门挂起时**不调用 `next()`**，等于把失败独吞 ⇒ 看门狗永远收不到信号 ⇒
+> 浏览器永不重建 ⇒ 只能无限重试（实测连挂 12 次、回合卡死）。修法见 `lib/index.js` 里
+> `handleRequestError` 的注释。
 
 热更新（免重启）：
 
@@ -187,9 +216,9 @@ curl -X POST http://127.0.0.1:3080/dsh-peak-gate/wake
 ## 测试
 
 ```bash
-DSH_HOME=$(mktemp -d) node test/peak.test.mjs      # 纯逻辑：峰谷判定/匹配/配置清洗/失败判定/退避（54 项）
-DSH_HOME=$(mktemp -d) node test/netpark.test.mjs   # 行为：挂起→retry、/wake 立即重试、中止、开关与上限（14 项）
-DSH_HOME=$(mktemp -d) node test/release.test.mjs   # 行为：身份标签、放行本轮、忽略免拦滑动续期与撤销（20 项）
+DSH_HOME=$(mktemp -d) node test/peak.test.mjs      # 纯逻辑：峰谷判定/匹配/配置清洗/失败判定/退避（64 项）
+DSH_HOME=$(mktemp -d) node test/netpark.test.mjs   # 行为：挂起→retry、下游链不独吞、死通道判据、开关与上限（19 项）
+DSH_HOME=$(mktemp -d) node test/release.test.mjs   # 行为：身份标签、放行本轮、忽略免拦滑动续期与撤销（23 项）
 ```
 
 ## 注意
